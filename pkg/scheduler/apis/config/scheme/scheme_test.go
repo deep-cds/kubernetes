@@ -24,7 +24,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/kube-scheduler/config/v1alpha2"
+	"k8s.io/kube-scheduler/config/v1beta1"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/utils/pointer"
 	"sigs.k8s.io/yaml"
@@ -38,9 +38,9 @@ func TestCodecsDecodePluginConfig(t *testing.T) {
 		wantProfiles []config.KubeSchedulerProfile
 	}{
 		{
-			name: "v1alpha2 all plugin args in default profile",
+			name: "v1beta1 all plugin args in default profile",
 			data: []byte(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 profiles:
 - pluginConfig:
@@ -78,6 +78,9 @@ profiles:
       resources:
       - name: memory
         weight: 1
+  - name: VolumeBinding
+    args:
+      bindTimeoutSeconds: 300
 `),
 			wantProfiles: []config.KubeSchedulerProfile{
 				{
@@ -98,7 +101,8 @@ profiles:
 						{
 							Name: "RequestedToCapacityRatio",
 							Args: &config.RequestedToCapacityRatioArgs{
-								Shape: []config.UtilizationShapePoint{{Utilization: 1}},
+								Shape:     []config.UtilizationShapePoint{{Utilization: 1}},
+								Resources: []config.ResourceSpec{{Name: "cpu", Weight: 1}, {Name: "memory", Weight: 1}},
 							},
 						},
 						{
@@ -127,20 +131,26 @@ profiles:
 								Resources: []config.ResourceSpec{{Name: "memory", Weight: 1}},
 							},
 						},
+						{
+							Name: "VolumeBinding",
+							Args: &config.VolumeBindingArgs{
+								BindTimeoutSeconds: 300,
+							},
+						},
 					},
 				},
 			},
 		},
 		{
-			name: "v1alpha2 plugins can include version and kind",
+			name: "v1beta1 plugins can include version and kind",
 			data: []byte(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 profiles:
 - pluginConfig:
   - name: NodeLabel
     args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       kind: NodeLabelArgs
       presentLabels: ["bars"]
 `),
@@ -159,22 +169,22 @@ profiles:
 		{
 			name: "plugin group and kind should match the type",
 			data: []byte(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 profiles:
 - pluginConfig:
   - name: NodeLabel
     args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       kind: InterPodAffinityArgs
 `),
 			wantErr: "decoding .profiles[0].pluginConfig[0]: args for plugin NodeLabel were not of type NodeLabelArgs.kubescheduler.config.k8s.io, got InterPodAffinityArgs.kubescheduler.config.k8s.io",
 		},
 		{
 			// TODO: do not replicate this case for v1beta1.
-			name: "v1alpha2 case insensitive RequestedToCapacityRatioArgs",
+			name: "v1beta1 case insensitive RequestedToCapacityRatioArgs",
 			data: []byte(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 profiles:
 - pluginConfig:
@@ -215,7 +225,7 @@ profiles:
 		{
 			name: "out-of-tree plugin args",
 			data: []byte(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 profiles:
 - pluginConfig:
@@ -241,7 +251,7 @@ profiles:
 		{
 			name: "empty and no plugin args",
 			data: []byte(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 profiles:
 - pluginConfig:
@@ -253,6 +263,8 @@ profiles:
   - name: NodeResourcesLeastAllocated
     args:
   - name: NodeResourcesMostAllocated
+    args:
+  - name: VolumeBinding
     args:
 `),
 			wantProfiles: []config.KubeSchedulerProfile{
@@ -282,6 +294,12 @@ profiles:
 								Resources: []config.ResourceSpec{{Name: "cpu", Weight: 1}, {Name: "memory", Weight: 1}},
 							},
 						},
+						{
+							Name: "VolumeBinding",
+							Args: &config.VolumeBindingArgs{
+								BindTimeoutSeconds: 600,
+							},
+						},
 					},
 				},
 			},
@@ -293,12 +311,12 @@ profiles:
 			obj, gvk, err := decoder.Decode(tt.data, nil, nil)
 			if err != nil {
 				if tt.wantErr != err.Error() {
-					t.Fatalf("got err %w, want %w", err, tt.wantErr)
+					t.Fatalf("got err %v, want %v", err.Error(), tt.wantErr)
 				}
 				return
 			}
 			if len(tt.wantErr) != 0 {
-				t.Fatal("no error produced, wanted %w", tt.wantErr)
+				t.Fatalf("no error produced, wanted %v", tt.wantErr)
 			}
 			got, ok := obj.(*config.KubeSchedulerConfiguration)
 			if !ok {
@@ -319,28 +337,36 @@ func TestCodecsEncodePluginConfig(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "v1alpha2 in-tree and out-of-tree plugins",
-			version: v1alpha2.SchemeGroupVersion,
-			obj: &v1alpha2.KubeSchedulerConfiguration{
-				Profiles: []v1alpha2.KubeSchedulerProfile{
+			name:    "v1beta1 in-tree and out-of-tree plugins",
+			version: v1beta1.SchemeGroupVersion,
+			obj: &v1beta1.KubeSchedulerConfiguration{
+				Profiles: []v1beta1.KubeSchedulerProfile{
 					{
-						PluginConfig: []v1alpha2.PluginConfig{
+						PluginConfig: []v1beta1.PluginConfig{
 							{
 								Name: "InterPodAffinity",
 								Args: runtime.RawExtension{
-									Object: &v1alpha2.InterPodAffinityArgs{
+									Object: &v1beta1.InterPodAffinityArgs{
 										HardPodAffinityWeight: pointer.Int32Ptr(5),
+									},
+								},
+							},
+							{
+								Name: "VolumeBinding",
+								Args: runtime.RawExtension{
+									Object: &v1beta1.VolumeBindingArgs{
+										BindTimeoutSeconds: pointer.Int64Ptr(300),
 									},
 								},
 							},
 							{
 								Name: "RequestedToCapacityRatio",
 								Args: runtime.RawExtension{
-									Object: &v1alpha2.RequestedToCapacityRatioArgs{
-										Shape: []v1alpha2.UtilizationShapePoint{
+									Object: &v1beta1.RequestedToCapacityRatioArgs{
+										Shape: []v1beta1.UtilizationShapePoint{
 											{Utilization: 1, Score: 2},
 										},
-										Resources: []v1alpha2.ResourceSpec{
+										Resources: []v1beta1.ResourceSpec{
 											{Name: "lower", Weight: 2},
 										},
 									},
@@ -349,8 +375,8 @@ func TestCodecsEncodePluginConfig(t *testing.T) {
 							{
 								Name: "NodeResourcesLeastAllocated",
 								Args: runtime.RawExtension{
-									Object: &v1alpha2.NodeResourcesLeastAllocatedArgs{
-										Resources: []v1alpha2.ResourceSpec{
+									Object: &v1beta1.NodeResourcesLeastAllocatedArgs{
+										Resources: []v1beta1.ResourceSpec{
 											{Name: "mem", Weight: 2},
 										},
 									},
@@ -366,7 +392,7 @@ func TestCodecsEncodePluginConfig(t *testing.T) {
 					},
 				},
 			},
-			want: `apiVersion: kubescheduler.config.k8s.io/v1alpha2
+			want: `apiVersion: kubescheduler.config.k8s.io/v1beta1
 clientConnection:
   acceptContentTypes: ""
   burst: 0
@@ -385,12 +411,17 @@ leaderElection:
 profiles:
 - pluginConfig:
   - args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       hardPodAffinityWeight: 5
       kind: InterPodAffinityArgs
     name: InterPodAffinity
   - args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
+      bindTimeoutSeconds: 300
+      kind: VolumeBindingArgs
+    name: VolumeBinding
+  - args:
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       kind: RequestedToCapacityRatioArgs
       resources:
       - Name: lower
@@ -400,7 +431,7 @@ profiles:
         Utilization: 1
     name: RequestedToCapacityRatio
   - args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       kind: NodeResourcesLeastAllocatedArgs
       resources:
       - Name: mem
@@ -412,8 +443,8 @@ profiles:
 `,
 		},
 		{
-			name:    "v1alpha2 in-tree and out-of-tree plugins from internal",
-			version: v1alpha2.SchemeGroupVersion,
+			name:    "v1beta1 in-tree and out-of-tree plugins from internal",
+			version: v1beta1.SchemeGroupVersion,
 			obj: &config.KubeSchedulerConfiguration{
 				Profiles: []config.KubeSchedulerProfile{
 					{
@@ -431,6 +462,12 @@ profiles:
 								},
 							},
 							{
+								Name: "VolumeBinding",
+								Args: &config.VolumeBindingArgs{
+									BindTimeoutSeconds: 300,
+								},
+							},
+							{
 								Name: "OutOfTreePlugin",
 								Args: &runtime.Unknown{
 									Raw: []byte(`{"foo":"bar"}`),
@@ -440,8 +477,7 @@ profiles:
 					},
 				},
 			},
-			want: `apiVersion: kubescheduler.config.k8s.io/v1alpha2
-bindTimeoutSeconds: 0
+			want: `apiVersion: kubescheduler.config.k8s.io/v1beta1
 clientConnection:
   acceptContentTypes: ""
   burst: 0
@@ -468,17 +504,22 @@ podMaxBackoffSeconds: 0
 profiles:
 - pluginConfig:
   - args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       hardPodAffinityWeight: 5
       kind: InterPodAffinityArgs
     name: InterPodAffinity
   - args:
-      apiVersion: kubescheduler.config.k8s.io/v1alpha2
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
       kind: NodeResourcesMostAllocatedArgs
       resources:
       - Name: cpu
         Weight: 1
     name: NodeResourcesMostAllocated
+  - args:
+      apiVersion: kubescheduler.config.k8s.io/v1beta1
+      bindTimeoutSeconds: 300
+      kind: VolumeBindingArgs
+    name: VolumeBinding
   - args:
       foo: bar
     name: OutOfTreePlugin

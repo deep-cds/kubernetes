@@ -250,3 +250,13 @@ type Zones interface {
 type PVLabeler interface {
 	GetLabelsForVolume(ctx context.Context, pv *v1.PersistentVolume) (map[string]string, error)
 }
+
+// InstanceMetadata contains metadata about the specific instance.
+type InstanceMetadata struct {
+	// ProviderID is provider's id that instance belongs to.
+	ProviderID string
+	// Type is instance's type.
+	Type string
+	// NodeAddress contains information for the instance's address.
+	NodeAddresses []v1.NodeAddress
+}

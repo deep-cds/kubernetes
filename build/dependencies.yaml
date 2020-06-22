@@ -1,6 +1,6 @@
 dependencies:
   - name: "cni"
-    version: 0.8.5
+    version: 0.8.6
     refPaths:
     - path: build/workspace.bzl
       match: CNI_VERSION =
@@ -50,16 +50,8 @@ dependencies:
       match: etcd_docker_tag|etcd_version
     - path: build/workspace.bzl
       match: ETCD_VERSION
-    - path: cluster/gce/manifests/etcd-empty-dir-cleanup.yaml
-      match: k8s.gcr.io/etcd-empty-dir-cleanup
     - path: cluster/gce/upgrade-aliases.sh
       match: ETCD_IMAGE|ETCD_VERSION
-    - path: cluster/images/etcd-empty-dir-cleanup/Makefile
-      match: ETCD_VERSION|TAG
-    - path: cluster/images/etcd/Makefile
-      match: BUNDLED_ETCD_VERSIONS\?|LATEST_ETCD_VERSION\?
-    - path: cluster/images/etcd/migrate-if-needed.sh
-      match: BUNDLED_VERSIONS=
     - path: cmd/kubeadm/app/constants/constants.go
     - path: hack/lib/etcd.sh
       match: ETCD_VERSION=
@@ -67,6 +59,14 @@ dependencies:
       match: quay.io/coreos/etcd
     - path: test/e2e/framework/nodes_util.go
       match: const etcdImage
+
+  - name: "etcd-image"
+    version: 3.4.9
+    refPaths:
+    - path: cluster/images/etcd/Makefile
+      match: BUNDLED_ETCD_VERSIONS\?|LATEST_ETCD_VERSION\?
+    - path: cluster/images/etcd/migrate-if-needed.sh
+      match: BUNDLED_VERSIONS=
 
   - name: "golang"
     version: 1.13.9
@@ -100,8 +100,6 @@ dependencies:
       match: BASEIMAGE\?\=us\.gcr\.io\/k8s-artifacts-prod\/build-image\/debian-base-ppc64le:v\d+\.\d+\.\d+
     - path: cluster/images/etcd/Makefile
       match: BASEIMAGE\?\=us\.gcr\.io\/k8s-artifacts-prod\/build-image\/debian-base-s390x:v\d+\.\d+\.\d+
-    - path: cluster/images/etcd-empty-dir-cleanup/Dockerfile
-      match: us\.gcr\.io\/k8s-artifacts-prod\/build-image\/debian-base:v\d+\.\d+\.\d+
 
   - name: "k8s.gcr.io/debian-iptables"
     version: 12.1.0
@@ -197,3 +195,11 @@ dependencies:
       match: k8s.gcr.io\/pause:\d+\.\d+
     - path: test/utils/image/manifest.go
       match: configs\[Pause\] = Config{gcRegistry, "pause", "\d+\.\d+"}
+
+  - name: "repo-infra"
+    version: 0.0.5
+    refPaths:
+    - path: build/root/WORKSPACE
+      match: strip_prefix = "repo-infra-\d+.\d+.\d+"
+    - path: build/root/WORKSPACE
+      match: https://github.com/kubernetes/repo-infra/archive/v\d+.\d+.\d+.tar.gz

@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -209,6 +210,12 @@ const ServiceAnnotationLoadBalancerHCInterval = "service.beta.kubernetes.io/aws-
 // service to specify a comma separated list of EIP allocations to use as
 // static IP addresses for the NLB. Only supported on elbv2 (NLB)
 const ServiceAnnotationLoadBalancerEIPAllocations = "service.beta.kubernetes.io/aws-load-balancer-eip-allocations"
+
+// ServiceAnnotationLoadBalancerTargetNodeLabels is the annotation used on the service
+// to specify a comma-separated list of key-value pairs which will be used to select
+// the target nodes for the load balancer
+// For example: "Key1=Val1,Key2=Val2,KeyNoVal1=,KeyNoVal2"
+const ServiceAnnotationLoadBalancerTargetNodeLabels = "service.beta.kubernetes.io/aws-load-balancer-target-node-labels"
 
 // Event key when a volume is stuck on attaching state when being attached to a volume
 const volumeAttachmentStuck = "VolumeAttachmentStuck"
@@ -1202,7 +1209,13 @@ func azToRegion(az string) (string, error) {
 	if len(az) < 1 {
 		return "", fmt.Errorf("invalid (empty) AZ")
 	}
-	region := az[:len(az)-1]
+
+	r := regexp.MustCompile(`^([a-zA-Z]+-)+\d+`)
+	region := r.FindString(az)
+	if region == "" {
+		return "", fmt.Errorf("invalid AZ: %s", az)
+	}
+
 	return region, nil
 }
 
@@ -1409,7 +1422,9 @@ func (c *Cloud) NodeAddresses(ctx context.Context, name types.NodeName) ([]v1.No
 		// We want the IPs to end up in order by interface (in particular, we want eth0's
 		// IPs first), but macs isn't necessarily sorted in that order so we have to
 		// explicitly order by device-number (device-number == the "0" in "eth0").
-		macIPs := make(map[int]string)
+
+		var macIDs []string
+		macDevNum := make(map[string]int)
 		for _, macID := range strings.Split(macs, "\n") {
 			if macID == "" {
 				continue
@@ -1424,18 +1439,22 @@ func (c *Cloud) NodeAddresses(ctx context.Context, name types.NodeName) ([]v1.No
 				klog.Warningf("Bad device-number %q for interface %s\n", numStr, macID)
 				continue
 			}
+			macIDs = append(macIDs, macID)
+			macDevNum[macID] = num
+		}
+
+		// Sort macIDs by interface device-number
+		sort.Slice(macIDs, func(i, j int) bool {
+			return macDevNum[macIDs[i]] < macDevNum[macIDs[j]]
+		})
+
+		for _, macID := range macIDs {
 			ipPath := path.Join("network/interfaces/macs/", macID, "local-ipv4s")
-			macIPs[num], err = c.metadata.GetMetadata(ipPath)
+			internalIPs, err := c.metadata.GetMetadata(ipPath)
 			if err != nil {
 				return nil, fmt.Errorf("error querying AWS metadata for %q: %q", ipPath, err)
 			}
-		}
 
-		for i := 0; i < len(macIPs); i++ {
-			internalIPs := macIPs[i]
-			if internalIPs == "" {
-				continue
-			}
 			for _, internalIP := range strings.Split(internalIPs, "\n") {
 				if internalIP == "" {
 					continue
@@ -1644,6 +1663,31 @@ func (c *Cloud) InstanceShutdownByProviderID(ctx context.Context, providerID str
 		}
 	}
 	return false, nil
+}
+
+// InstanceMetadataByProviderID returns metadata of the specified instance.
+func (c *Cloud) InstanceMetadataByProviderID(ctx context.Context, providerID string) (*cloudprovider.InstanceMetadata, error) {
+	instanceID, err := KubernetesInstanceID(providerID).MapToAWSInstanceID()
+	if err != nil {
+		return nil, err
+	}
+
+	instance, err := describeInstance(c.ec2, instanceID)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO ignore checking whether `*instance.State.Name == ec2.InstanceStateNameTerminated` here.
+	// If not behave as expected, add it.
+	addresses, err := extractNodeAddresses(instance)
+	if err != nil {
+		return nil, err
+	}
+	return &cloudprovider.InstanceMetadata{
+		ProviderID:    providerID,
+		Type:          aws.StringValue(instance.InstanceType),
+		NodeAddresses: addresses,
+	}, nil
 }
 
 // InstanceID returns the cloud provider ID of the node with the specified nodeName.
@@ -3543,7 +3587,7 @@ func (c *Cloud) buildELBSecurityGroupList(serviceName types.NamespacedName, load
 			// Create a security group for the load balancer
 			sgName := "k8s-elb-" + loadBalancerName
 			sgDescription := fmt.Sprintf("Security group for Kubernetes ELB %s (%v)", loadBalancerName, serviceName)
-			securityGroupID, err = c.ensureSecurityGroup(sgName, sgDescription, getLoadBalancerAdditionalTags(annotations))
+			securityGroupID, err = c.ensureSecurityGroup(sgName, sgDescription, getKeyValuePropertiesFromAnnotation(annotations, ServiceAnnotationLoadBalancerAdditionalTags))
 			if err != nil {
 				klog.Errorf("Error creating load balancer security group: %q", err)
 				return nil, setupSg, err
@@ -3661,7 +3705,7 @@ func (c *Cloud) EnsureLoadBalancer(ctx context.Context, clusterName string, apiS
 		return nil, fmt.Errorf("LoadBalancerIP cannot be specified for AWS ELB")
 	}
 
-	instances, err := c.findInstancesForELB(nodes)
+	instances, err := c.findInstancesForELB(nodes, annotations)
 	if err != nil {
 		return nil, err
 	}
@@ -4445,7 +4489,7 @@ func (c *Cloud) EnsureLoadBalancerDeleted(ctx context.Context, clusterName strin
 
 // UpdateLoadBalancer implements LoadBalancer.UpdateLoadBalancer
 func (c *Cloud) UpdateLoadBalancer(ctx context.Context, clusterName string, service *v1.Service, nodes []*v1.Node) error {
-	instances, err := c.findInstancesForELB(nodes)
+	instances, err := c.findInstancesForELB(nodes, service.Annotations)
 	if err != nil {
 		return err
 	}

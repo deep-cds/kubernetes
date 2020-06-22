@@ -681,6 +681,23 @@ func TestNodeAddressesWithMetadata(t *testing.T) {
 	}
 }
 
+func TestInstanceMetadataByProviderID(t *testing.T) {
+	instance0 := makeInstance(0, "192.168.0.1", "1.2.3.4", "instance-same.ec2.internal", "instance-same.ec2.external", true)
+	aws1, _ := mockInstancesResp(&instance0, []*ec2.Instance{&instance0})
+	// change node name so it uses the instance instead of metadata
+	aws1.selfAWSInstance.nodeName = "foo"
+
+	md, err := aws1.InstanceMetadataByProviderID(context.TODO(), "/us-east-1a/i-0")
+	if err != nil {
+		t.Errorf("should not error when instance found")
+	}
+	if md.ProviderID != "/us-east-1a/i-0" || md.Type != "c3.large" {
+		t.Errorf("expect providerID %s get %s, expect type %s get %s", "/us-east-1a/i-0", md.ProviderID, "c3.large", md.Type)
+	}
+	testHasNodeAddress(t, md.NodeAddresses, v1.NodeInternalIP, "192.168.0.1")
+	testHasNodeAddress(t, md.NodeAddresses, v1.NodeExternalIP, "1.2.3.4")
+}
+
 func TestParseMetadataLocalHostname(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1513,7 +1530,7 @@ func TestProxyProtocolEnabled(t *testing.T) {
 	assert.False(t, result, "did not expect to find %s in %s", ProxyProtocolPolicyName, policies)
 }
 
-func TestGetLoadBalancerAdditionalTags(t *testing.T) {
+func TestGetKeyValuePropertiesFromAnnotation(t *testing.T) {
 	tagTests := []struct {
 		Annotations map[string]string
 		Tags        map[string]string
@@ -1564,7 +1581,7 @@ func TestGetLoadBalancerAdditionalTags(t *testing.T) {
 	}
 
 	for _, tagTest := range tagTests {
-		result := getLoadBalancerAdditionalTags(tagTest.Annotations)
+		result := getKeyValuePropertiesFromAnnotation(tagTest.Annotations, ServiceAnnotationLoadBalancerAdditionalTags)
 		for k, v := range result {
 			if len(result) != len(tagTest.Tags) {
 				t.Errorf("incorrect expected length: %v != %v", result, tagTest.Tags)
@@ -2516,4 +2533,24 @@ func newMockedFakeAWSServices(id string) *FakeAWSServices {
 	s.ec2 = &MockedFakeEC2{FakeEC2Impl: s.ec2.(*FakeEC2Impl)}
 	s.elb = &MockedFakeELB{FakeELB: s.elb.(*FakeELB)}
 	return s
+}
+
+func TestAzToRegion(t *testing.T) {
+	testCases := []struct {
+		az     string
+		region string
+	}{
+		{"us-west-2a", "us-west-2"},
+		{"us-west-2-lax-1a", "us-west-2"},
+		{"ap-northeast-2a", "ap-northeast-2"},
+		{"us-gov-east-1a", "us-gov-east-1"},
+		{"us-iso-east-1a", "us-iso-east-1"},
+		{"us-isob-east-1a", "us-isob-east-1"},
+	}
+
+	for _, testCase := range testCases {
+		result, err := azToRegion(testCase.az)
+		assert.NoError(t, err)
+		assert.Equal(t, testCase.region, result)
+	}
 }

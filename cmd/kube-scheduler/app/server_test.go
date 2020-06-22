@@ -73,7 +73,7 @@ users:
 	// plugin config
 	pluginConfigFile := filepath.Join(tmpDir, "plugin.yaml")
 	if err := ioutil.WriteFile(pluginConfigFile, []byte(fmt.Sprintf(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: "%s"
@@ -110,7 +110,7 @@ profiles:
 	// multiple profiles config
 	multiProfilesConfig := filepath.Join(tmpDir, "multi-profiles.yaml")
 	if err := ioutil.WriteFile(multiProfilesConfig, []byte(fmt.Sprintf(`
-apiVersion: kubescheduler.config.k8s.io/v1alpha2
+apiVersion: kubescheduler.config.k8s.io/v1beta1
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: "%s"
@@ -154,8 +154,9 @@ profiles:
 		"PreFilterPlugin": {
 			{Name: "NodeResourcesFit"},
 			{Name: "NodePorts"},
-			{Name: "InterPodAffinity"},
 			{Name: "PodTopologySpread"},
+			{Name: "InterPodAffinity"},
+			{Name: "VolumeBinding"},
 		},
 		"FilterPlugin": {
 			{Name: "NodeUnschedulable"},
@@ -171,14 +172,14 @@ profiles:
 			{Name: "AzureDiskLimits"},
 			{Name: "VolumeBinding"},
 			{Name: "VolumeZone"},
-			{Name: "InterPodAffinity"},
 			{Name: "PodTopologySpread"},
+			{Name: "InterPodAffinity"},
 		},
 		"PreScorePlugin": {
 			{Name: "InterPodAffinity"},
-			{Name: "DefaultPodTopologySpread"},
-			{Name: "TaintToleration"},
 			{Name: "PodTopologySpread"},
+			{Name: "TaintToleration"},
+			{Name: "DefaultPodTopologySpread"},
 		},
 		"ScorePlugin": {
 			{Name: "NodeResourcesBalancedAllocation", Weight: 1},
@@ -187,9 +188,9 @@ profiles:
 			{Name: "NodeResourcesLeastAllocated", Weight: 1},
 			{Name: "NodeAffinity", Weight: 1},
 			{Name: "NodePreferAvoidPods", Weight: 10000},
-			{Name: "DefaultPodTopologySpread", Weight: 1},
+			{Name: "PodTopologySpread", Weight: 2},
 			{Name: "TaintToleration", Weight: 1},
-			{Name: "PodTopologySpread", Weight: 1},
+			{Name: "DefaultPodTopologySpread", Weight: 1},
 		},
 		"BindPlugin":      {{Name: "DefaultBinder"}},
 		"ReservePlugin":   {{Name: "VolumeBinding"}},
@@ -285,8 +286,9 @@ profiles:
 					"PreFilterPlugin": {
 						{Name: "NodeResourcesFit"},
 						{Name: "NodePorts"},
-						{Name: "InterPodAffinity"},
 						{Name: "PodTopologySpread"},
+						{Name: "InterPodAffinity"},
+						{Name: "VolumeBinding"},
 					},
 					"FilterPlugin": {
 						{Name: "NodeUnschedulable"},
@@ -302,14 +304,14 @@ profiles:
 						{Name: "AzureDiskLimits"},
 						{Name: "VolumeBinding"},
 						{Name: "VolumeZone"},
-						{Name: "InterPodAffinity"},
 						{Name: "PodTopologySpread"},
+						{Name: "InterPodAffinity"},
 					},
 					"PreScorePlugin": {
 						{Name: "InterPodAffinity"},
-						{Name: "DefaultPodTopologySpread"},
-						{Name: "TaintToleration"},
 						{Name: "PodTopologySpread"},
+						{Name: "TaintToleration"},
+						{Name: "DefaultPodTopologySpread"},
 					},
 					"ScorePlugin": {
 						{Name: "NodeResourcesBalancedAllocation", Weight: 1},
@@ -318,9 +320,9 @@ profiles:
 						{Name: "NodeResourcesMostAllocated", Weight: 1},
 						{Name: "NodeAffinity", Weight: 1},
 						{Name: "NodePreferAvoidPods", Weight: 10000},
-						{Name: "DefaultPodTopologySpread", Weight: 1},
+						{Name: "PodTopologySpread", Weight: 2},
 						{Name: "TaintToleration", Weight: 1},
-						{Name: "PodTopologySpread", Weight: 1},
+						{Name: "DefaultPodTopologySpread", Weight: 1},
 					},
 					"BindPlugin":      {{Name: "DefaultBinder"}},
 					"ReservePlugin":   {{Name: "VolumeBinding"}},
@@ -373,10 +375,9 @@ profiles:
 				t.Fatal(err)
 			}
 
-			var args []string
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			cc, sched, err := Setup(ctx, args, opts)
+			cc, sched, err := Setup(ctx, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
